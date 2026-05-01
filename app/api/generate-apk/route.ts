@@ -2,7 +2,27 @@ import { NextRequest, NextResponse } from "next/server"
 import { extractWebsiteMetadata, generatePackageId } from "@/lib/metadata-extractor"
 import JSZip from "jszip"
 
-export const maxDuration = 60 // Allow up to 60 seconds for APK generation
+export const maxDuration = 120 // Allow up to 120 seconds for APK generation (signing takes longer)
+
+// Generate a random password for APK signing
+function generateRandomPassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+  let password = ''
+  for (let i = 0; i < 16; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return password
+}
+
+interface SigningInfo {
+  fullName: string
+  organization: string
+  organizationalUnit: string
+  countryCode: string
+  keyPassword: string
+  storePassword: string
+  alias: string
+}
 
 interface CloudAPKRequest {
   packageId: string
@@ -24,7 +44,7 @@ interface CloudAPKRequest {
   fallbackType: string
   splashScreenFadeOutDuration: number
   signingMode: string
-  signing: null
+  signing: SigningInfo | null
   webManifestUrl: string
   manifestUrl: string
 }
@@ -89,7 +109,17 @@ export async function POST(request: NextRequest) {
       manifestUrl = `${baseUrl}/api/manifest?${manifestParams.toString()}`
     }
 
-    console.log("[v0] Using manifest URL:", manifestUrl)
+    // Generate signing credentials for the APK
+    // These are auto-generated for convenience - user can re-sign with their own key later
+    const signingInfo: SigningInfo = {
+      fullName: finalAppName,
+      organization: metadata.host.replace(/^www\./, ''),
+      organizationalUnit: "App",
+      countryCode: "US",
+      keyPassword: generateRandomPassword(),
+      storePassword: generateRandomPassword(),
+      alias: "app-key"
+    }
 
     // Prepare CloudAPK request
     const cloudAPKRequest: CloudAPKRequest = {
@@ -111,8 +141,8 @@ export async function POST(request: NextRequest) {
       isChromeOSOnly: false,
       fallbackType: "customtabs",
       splashScreenFadeOutDuration: 300,
-      signingMode: "none",
-      signing: null,
+      signingMode: "new",
+      signing: signingInfo,
       webManifestUrl: manifestUrl,
       manifestUrl: manifestUrl
     }
