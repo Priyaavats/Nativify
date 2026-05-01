@@ -6,6 +6,7 @@ export interface WebsiteMetadata {
   description: string
   host: string
   startUrl: string
+  manifestUrl: string | null
 }
 
 /**
@@ -22,6 +23,7 @@ export async function extractWebsiteMetadata(url: string): Promise<WebsiteMetada
   let backgroundColor = "#0F0F1A"
   let iconUrl = ""
   let description = ""
+  let manifestUrl: string | null = null
 
   try {
     // Fetch the website HTML
@@ -75,7 +77,7 @@ export async function extractWebsiteMetadata(url: string): Promise<WebsiteMetada
       || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']manifest["']/i)
     
     if (manifestMatch) {
-      const manifestUrl = new URL(manifestMatch[1], host).href
+      manifestUrl = new URL(manifestMatch[1], host).href
       try {
         const manifestResponse = await fetch(manifestUrl)
         if (manifestResponse.ok) {
@@ -146,7 +148,8 @@ export async function extractWebsiteMetadata(url: string): Promise<WebsiteMetada
     iconUrl,
     description,
     host,
-    startUrl: parsedUrl.pathname || "/"
+    startUrl: parsedUrl.pathname || "/",
+    manifestUrl
   }
 }
 

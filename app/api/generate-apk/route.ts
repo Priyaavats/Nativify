@@ -70,6 +70,27 @@ export async function POST(request: NextRequest) {
       ? finalAppName.substring(0, 12).trim() 
       : finalAppName
 
+    // Get the host URL for this request (for generating manifest URL)
+    const protocol = request.headers.get("x-forwarded-proto") || "https"
+    const host = request.headers.get("host") || "localhost:3000"
+    const baseUrl = `${protocol}://${host}`
+
+    // Use the site's manifest if available, otherwise generate one dynamically
+    let manifestUrl = metadata.manifestUrl
+    if (!manifestUrl) {
+      // Generate a dynamic manifest URL using our API
+      const manifestParams = new URLSearchParams({
+        name: finalAppName,
+        start_url: metadata.startUrl,
+        theme_color: finalThemeColor,
+        background_color: finalBackgroundColor,
+        icon_url: finalIconUrl
+      })
+      manifestUrl = `${baseUrl}/api/manifest?${manifestParams.toString()}`
+    }
+
+    console.log("[v0] Using manifest URL:", manifestUrl)
+
     // Prepare CloudAPK request
     const cloudAPKRequest: CloudAPKRequest = {
       packageId,
@@ -92,8 +113,8 @@ export async function POST(request: NextRequest) {
       splashScreenFadeOutDuration: 300,
       signingMode: "none",
       signing: null,
-      webManifestUrl: "",
-      manifestUrl: ""
+      webManifestUrl: manifestUrl,
+      manifestUrl: manifestUrl
     }
 
     // Call PWABuilder CloudAPK service
