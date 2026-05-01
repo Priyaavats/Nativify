@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo } from "react"
-import { Download, Copy, Check, Smartphone, Tablet, ExternalLink, Package, FileCode, Settings, Terminal, Loader2, CheckCircle2, XCircle, Play } from "lucide-react"
+import { Download, Copy, Check, Smartphone, Tablet, ExternalLink, Package, FileCode, Settings, Terminal, Loader2, CheckCircle2, XCircle } from "lucide-react"
 import JSZip from "jszip"
 import { saveAs } from "file-saver"
 import { Button } from "@/components/ui/button"
@@ -22,16 +22,16 @@ interface MobileSimulatorProps {
 
 type ViewMode = "phone" | "tablet"
 type TabType = "preview" | "app.js" | "app.json" | "package.json" | "eas.json"
-type BuildStatus = "idle" | "starting" | "queued" | "building" | "finished" | "error"
+type BuildStatus = "idle" | "analyzing" | "generating" | "downloading" | "finished" | "error"
 
 interface BuildState {
   status: BuildStatus
-  buildId?: string
-  snackId?: string
-  snackUrl?: string
-  artifactUrl?: string
-  expoUrl?: string
+  progress: number
+  apkBlob?: Blob
+  apkFileName?: string
   message: string
+  fallbackToExpo?: boolean
+  snackUrl?: string
   instructions?: string[]
 }
 
@@ -389,12 +389,82 @@ export function MobileSimulator({ url }: MobileSimulatorProps) {
   const [buildDialogOpen, setBuildDialogOpen] = useState(false)
   const [buildState, setBuildState] = useState<BuildState>({
     status: "idle",
+    progress: 0,
     message: ""
   })
 
-  // Start automated build
-  const handleAutomatedBuild = async () => {
-    setBuildState({ status: "starting", message: "Preparing your app..." })
+  // Start direct APK build
+  const handleDirectAPKBuild = async () => {
+    setBuildState({ status: "analyzing", progress: 10, message: "Analyzing website..." })
+    
+    try {
+      // Progress simulation for better UX
+      const progressInterval = setInterval(() => {
+        setBuildState(prev => {
+          if (prev.status === "generating" && prev.progress < 80) {
+            return { ...prev, progress: prev.progress + 5 }
+          }
+          return prev
+        })
+      }, 2000)
+
+      setBuildState({ status: "generating", progress: 20, message: "Generating APK..." })
+      
+      const response = await fetch("/api/generate-apk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      })
+      
+      clearInterval(progressInterval)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        
+        // Check if we should fallback to Expo
+        if (errorData.fallback) {
+          setBuildState({
+            status: "error",
+            progress: 0,
+            message: errorData.error || "Direct APK generation failed",
+            fallbackToExpo: true
+          })
+          return
+        }
+        
+        throw new Error(errorData.error || "APK generation failed")
+      }
+      
+      setBuildState({ status: "downloading", progress: 90, message: "Preparing download..." })
+      
+      // Get APK blob from response
+      const apkBlob = await response.blob()
+      const contentDisposition = response.headers.get("Content-Disposition")
+      let fileName = "app.apk"
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="([^"]+)"/)
+        if (match) fileName = match[1]
+      }
+      
+      setBuildState({
+        status: "finished",
+        progress: 100,
+        apkBlob,
+        apkFileName: fileName,
+        message: "Your APK is ready!"
+      })
+    } catch (error) {
+      setBuildState({
+        status: "error",
+        progress: 0,
+        message: error instanceof Error ? error.message : "Failed to generate APK"
+      })
+    }
+  }
+
+  // Fallback to Expo Snack build
+  const handleExpoBuild = async () => {
+    setBuildState({ status: "generating", progress: 30, message: "Creating Expo Snack..." })
     
     try {
       const response = await fetch("/api/build", {
@@ -409,9 +479,9 @@ export function MobileSimulator({ url }: MobileSimulatorProps) {
         throw new Error(data.error || "Build failed")
       }
       
-      // Snack-based build with instructions
       setBuildState({
         status: "finished",
+        progress: 100,
         snackUrl: data.snackUrl,
         message: data.message || "Your app is ready!",
         instructions: data.instructions
@@ -419,13 +489,20 @@ export function MobileSimulator({ url }: MobileSimulatorProps) {
     } catch (error) {
       setBuildState({
         status: "error",
-        message: error instanceof Error ? error.message : "Failed to start build"
+        progress: 0,
+        message: error instanceof Error ? error.message : "Failed to create Expo build"
       })
     }
   }
 
+  const handleDownloadAPK = () => {
+    if (buildState.apkBlob && buildState.apkFileName) {
+      saveAs(buildState.apkBlob, buildState.apkFileName)
+    }
+  }
+
   const resetBuild = () => {
-    setBuildState({ status: "idle", message: "" })
+    setBuildState({ status: "idle", progress: 0, message: "" })
   }
 
   // Generate all code dynamically based on the URL
@@ -598,22 +675,22 @@ For issues, visit: https://nativify.dev/support
               
               {buildState.status === "idle" ? (
                 <div className="flex flex-col gap-4 mt-4">
-                  {/* Automated Build Option */}
+                  {/* Direct APK Build Option */}
                   <div className="p-4 bg-primary/10 rounded-lg border border-primary/30">
                     <div className="flex items-start gap-3">
-                      <Package className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                      <Download className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                       <div className="flex-1">
-                        <p className="font-medium text-foreground">Automated Build (Recommended)</p>
+                        <p className="font-medium text-foreground">Direct APK Download (Recommended)</p>
                         <p className="text-sm text-muted-foreground mt-1">
-                          We&apos;ll build your APK automatically using Expo EAS. Just click the button below.
+                          Generate and download an APK file directly. No account required.
                         </p>
                         <Button
-                          onClick={handleAutomatedBuild}
+                          onClick={handleDirectAPKBuild}
                           className="mt-3 gap-2"
                           size="sm"
                         >
-                          <Package className="w-4 h-4" />
-                          Build APK Now
+                          <Download className="w-4 h-4" />
+                          Generate APK
                         </Button>
                       </div>
                     </div>
@@ -621,62 +698,40 @@ For issues, visit: https://nativify.dev/support
 
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-xs">or build manually</span>
+                    <span className="text-xs">or use Expo for more options</span>
                     <div className="flex-1 h-px bg-border" />
                   </div>
 
-                  {/* Manual Build Steps */}
+                  {/* Expo Build Option */}
                   <div className="flex items-start gap-3 p-4 bg-surface rounded-lg border border-border">
-                    <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                      <span className="text-sm font-bold text-muted-foreground">1</span>
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Download the project files</p>
-                      <p className="text-sm text-muted-foreground mt-1">Click &quot;Download Project&quot; to get all the source files.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 p-4 bg-surface rounded-lg border border-border">
-                    <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                      <span className="text-sm font-bold text-muted-foreground">2</span>
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Install and build</p>
-                      <pre className="mt-2 p-3 bg-background rounded-md text-xs font-mono text-foreground/80 overflow-x-auto">
-                        <code>npm install -g eas-cli{'\n'}npm install{'\n'}eas login{'\n'}eas build -p android --profile preview</code>
-                      </pre>
+                    <Package className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-medium text-foreground">Build with Expo</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Use Expo Snack for full React Native customization and Play Store signing.
+                      </p>
+                      <Button
+                        onClick={handleExpoBuild}
+                        variant="outline"
+                        className="mt-3 gap-2"
+                        size="sm"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        Build with Expo
+                      </Button>
                     </div>
                   </div>
                 </div>
-              ) : buildState.status === "starting" || buildState.status === "queued" || buildState.status === "building" ? (
+              ) : buildState.status === "analyzing" || buildState.status === "generating" || buildState.status === "downloading" ? (
                 <div className="flex flex-col items-center gap-4 py-8">
                   <Loader2 className="w-12 h-12 text-primary animate-spin" />
                   <div className="text-center">
                     <p className="font-medium text-foreground">{buildState.message}</p>
-                    {buildState.status === "queued" && (
-                      <p className="text-sm text-muted-foreground mt-1">
-                        EAS builds typically take 5-15 minutes
-                      </p>
-                    )}
+                    <p className="text-sm text-muted-foreground mt-1">
+                      This usually takes 30-60 seconds
+                    </p>
                   </div>
-                  <Progress 
-                    value={
-                      buildState.status === "starting" ? 10 :
-                      buildState.status === "queued" ? 30 :
-                      buildState.status === "building" ? 60 : 0
-                    } 
-                    className="w-full max-w-xs"
-                  />
-                  {buildState.expoUrl && (
-                    <a
-                      href={buildState.expoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-primary hover:underline flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      View build progress on Expo
-                    </a>
-                  )}
+                  <Progress value={buildState.progress} className="w-full max-w-xs" />
                 </div>
               ) : buildState.status === "finished" ? (
                 <div className="flex flex-col items-center gap-4 py-8">
@@ -685,13 +740,16 @@ For issues, visit: https://nativify.dev/support
                     <p className="font-medium text-foreground text-lg">{buildState.message}</p>
                   </div>
                   
-                  {buildState.artifactUrl ? (
-                    <Button asChild size="lg" className="gap-2 mt-2">
-                      <a href={buildState.artifactUrl} download>
+                  {buildState.apkBlob ? (
+                    <div className="flex flex-col items-center gap-3">
+                      <Button onClick={handleDownloadAPK} size="lg" className="gap-2 mt-2">
                         <Download className="w-5 h-5" />
-                        Download APK
-                      </a>
-                    </Button>
+                        Download APK ({(buildState.apkBlob.size / 1024 / 1024).toFixed(1)} MB)
+                      </Button>
+                      <p className="text-xs text-muted-foreground text-center max-w-sm">
+                        To install, enable &quot;Install from unknown sources&quot; in your Android settings.
+                      </p>
+                    </div>
                   ) : buildState.snackUrl ? (
                     <div className="flex flex-col gap-4 w-full max-w-md">
                       <Button asChild size="lg" className="gap-2">
@@ -713,18 +771,6 @@ For issues, visit: https://nativify.dev/support
                     </div>
                   ) : null}
 
-                  {buildState.expoUrl && (
-                    <a
-                      href={buildState.expoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mt-2"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      View on Expo
-                    </a>
-                  )}
-
                   <Button variant="outline" onClick={resetBuild} className="mt-4">
                     Build Another
                   </Button>
@@ -734,20 +780,21 @@ For issues, visit: https://nativify.dev/support
                   <XCircle className="w-12 h-12 text-destructive" />
                   <div className="text-center">
                     <p className="font-medium text-foreground">{buildState.message}</p>
+                    {buildState.fallbackToExpo && (
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Try using Expo instead for a more reliable build.
+                      </p>
+                    )}
                   </div>
-                  {buildState.expoUrl && (
-                    <a
-                      href={buildState.expoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-primary hover:underline flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      View details on Expo
-                    </a>
-                  )}
                   <div className="flex gap-2 mt-4">
-                    <Button onClick={handleAutomatedBuild}>Try Again</Button>
+                    {buildState.fallbackToExpo ? (
+                      <Button onClick={handleExpoBuild} className="gap-2">
+                        <Package className="w-4 h-4" />
+                        Build with Expo
+                      </Button>
+                    ) : (
+                      <Button onClick={handleDirectAPKBuild}>Try Again</Button>
+                    )}
                     <Button variant="outline" onClick={resetBuild}>Cancel</Button>
                   </div>
                 </div>
