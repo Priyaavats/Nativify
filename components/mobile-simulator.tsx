@@ -27,47 +27,119 @@ type BuildStatus = "idle" | "analyzing" | "generating" | "downloading" | "finish
 interface BuildState {
   status: BuildStatus
   progress: number
-  apkBlob?: Blob
-  apkFileName?: string
   message: string
-  fallbackToExpo?: boolean
   snackUrl?: string
   instructions?: string[]
 }
 
-// Generate React Native code with WebView for the user's URL
+// Generate React Native code with WebView, header bar, and pull-to-refresh
 function generateAppCode(websiteUrl: string): string {
-  return `import React, { useState, useRef } from 'react';
-import { StyleSheet, View, ActivityIndicator, SafeAreaView, StatusBar, Platform, BackHandler, Text, TouchableOpacity } from 'react-native';
+  let appName = "My App"
+  try {
+    const hostname = new URL(websiteUrl).hostname.replace(/^www\./, '').split('.')[0]
+    appName = hostname.charAt(0).toUpperCase() + hostname.slice(1)
+  } catch {
+    appName = "My App"
+  }
+  
+  return `import React, { useState, useRef, useCallback } from 'react';
+import { 
+  StyleSheet, 
+  View, 
+  ActivityIndicator, 
+  SafeAreaView, 
+  StatusBar, 
+  Platform, 
+  BackHandler, 
+  Text, 
+  TouchableOpacity,
+  RefreshControl,
+  ScrollView
+} from 'react-native';
 import { WebView } from 'react-native-webview';
+
+const APP_NAME = '${appName}';
+const WEBSITE_URL = '${websiteUrl}';
 
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [canGoForward, setCanGoForward] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState(WEBSITE_URL);
+  const [refreshing, setRefreshing] = useState(false);
   const webViewRef = useRef(null);
 
-  const handleBack = () => {
-    if (webViewRef.current) {
-      webViewRef.current.goBack();
-      return true;
-    }
-    return false;
-  };
-
+  // Handle Android back button
   React.useEffect(() => {
     if (Platform.OS === 'android') {
+      const handleBack = () => {
+        if (canGoBack && webViewRef.current) {
+          webViewRef.current.goBack();
+          return true;
+        }
+        return false;
+      };
       BackHandler.addEventListener('hardwareBackPress', handleBack);
       return () => BackHandler.removeEventListener('hardwareBackPress', handleBack);
     }
+  }, [canGoBack]);
+
+  // Pull to refresh handler
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    if (webViewRef.current) {
+      webViewRef.current.reload();
+    }
   }, []);
+
+  // Navigation state update
+  const handleNavigationStateChange = (navState) => {
+    setCanGoBack(navState.canGoBack);
+    setCanGoForward(navState.canGoForward);
+    setCurrentUrl(navState.url);
+  };
+
+  // Header component with navigation controls
+  const Header = () => (
+    <View style={styles.header}>
+      <View style={styles.headerLeft}>
+        <TouchableOpacity 
+          style={[styles.navButton, !canGoBack && styles.navButtonDisabled]}
+          onPress={() => canGoBack && webViewRef.current?.goBack()}
+          disabled={!canGoBack}
+        >
+          <Text style={[styles.navButtonText, !canGoBack && styles.navButtonTextDisabled]}>←</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.navButton, !canGoForward && styles.navButtonDisabled]}
+          onPress={() => canGoForward && webViewRef.current?.goForward()}
+          disabled={!canGoForward}
+        >
+          <Text style={[styles.navButtonText, !canGoForward && styles.navButtonTextDisabled]}>→</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.headerTitle} numberOfLines={1}>{APP_NAME}</Text>
+      <TouchableOpacity 
+        style={styles.refreshButton}
+        onPress={() => webViewRef.current?.reload()}
+      >
+        <Text style={styles.refreshButtonText}>↻</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
+        <Header />
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Failed to load</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => setError(false)}>
-            <Text style={styles.retryText}>Retry</Text>
+          <Text style={styles.errorEmoji}>⚠️</Text>
+          <Text style={styles.errorTitle}>Connection Error</Text>
+          <Text style={styles.errorText}>Unable to load the page</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => { setError(false); setLoading(true); }}>
+            <Text style={styles.retryText}>Try Again</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -76,25 +148,45 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F0F1A" />
-      {loading && (
-        <View style={styles.loader}>
-          <ActivityIndicator size="large" color="#4F46E5" />
-        </View>
-      )}
-      <WebView
-        ref={webViewRef}
-        source={{ uri: '${websiteUrl}' }}
-        style={styles.webview}
-        onLoadStart={() => setLoading(true)}
-        onLoadEnd={() => setLoading(false)}
-        onError={() => setError(true)}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        startInLoadingState={true}
-        scalesPageToFit={true}
-        allowsBackForwardNavigationGestures={true}
-      />
+      <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
+      <Header />
+      <View style={styles.webviewContainer}>
+        {loading && (
+          <View style={styles.loader}>
+            <ActivityIndicator size="large" color="#6366f1" />
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        )}
+        <ScrollView
+          contentContainerStyle={{ flex: 1 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#6366f1"
+              colors={['#6366f1']}
+            />
+          }
+        >
+          <WebView
+            ref={webViewRef}
+            source={{ uri: WEBSITE_URL }}
+            style={styles.webview}
+            onLoadStart={() => setLoading(true)}
+            onLoadEnd={() => { setLoading(false); setRefreshing(false); }}
+            onError={() => { setError(true); setRefreshing(false); }}
+            onNavigationStateChange={handleNavigationStateChange}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            startInLoadingState={false}
+            scalesPageToFit={true}
+            allowsBackForwardNavigationGestures={true}
+            pullToRefreshEnabled={true}
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+          />
+        </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -102,7 +194,66 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F0F1A',
+    backgroundColor: '#1a1a2e',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1a1a2e',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2d2d44',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  headerTitle: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  navButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#2d2d44',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navButtonDisabled: {
+    backgroundColor: '#252538',
+  },
+  navButtonText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  navButtonTextDisabled: {
+    color: '#4a4a5a',
+  },
+  refreshButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#6366f1',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  refreshButtonText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  webviewContainer: {
+    flex: 1,
+    backgroundColor: '#0f0f1a',
   },
   webview: {
     flex: 1,
@@ -115,28 +266,45 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0F0F1A',
+    backgroundColor: '#0f0f1a',
     zIndex: 10,
+  },
+  loadingText: {
+    color: '#9ca3af',
+    marginTop: 12,
+    fontSize: 14,
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0F0F1A',
+    backgroundColor: '#0f0f1a',
+    padding: 24,
   },
-  errorText: {
-    color: '#F5F5F5',
-    fontSize: 18,
+  errorEmoji: {
+    fontSize: 48,
     marginBottom: 16,
   },
+  errorTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  errorText: {
+    color: '#9ca3af',
+    fontSize: 14,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
   retryButton: {
-    backgroundColor: '#4F46E5',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 10,
   },
   retryText: {
-    color: '#FFFFFF',
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
   },
@@ -393,76 +561,7 @@ export function MobileSimulator({ url }: MobileSimulatorProps) {
     message: ""
   })
 
-  // Start direct APK build
-  const handleDirectAPKBuild = async () => {
-    setBuildState({ status: "analyzing", progress: 10, message: "Analyzing website..." })
-    
-    try {
-      // Progress simulation for better UX
-      const progressInterval = setInterval(() => {
-        setBuildState(prev => {
-          if (prev.status === "generating" && prev.progress < 80) {
-            return { ...prev, progress: prev.progress + 5 }
-          }
-          return prev
-        })
-      }, 2000)
-
-      setBuildState({ status: "generating", progress: 20, message: "Generating APK..." })
-      
-      const response = await fetch("/api/generate-apk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      })
-      
-      clearInterval(progressInterval)
-      
-      if (!response.ok) {
-        const errorData = await response.json()
-        
-        // Check if we should fallback to Expo
-        if (errorData.fallback) {
-          setBuildState({
-            status: "error",
-            progress: 0,
-            message: errorData.error || "Direct APK generation failed",
-            fallbackToExpo: true
-          })
-          return
-        }
-        
-        throw new Error(errorData.error || "APK generation failed")
-      }
-      
-      setBuildState({ status: "downloading", progress: 90, message: "Preparing download..." })
-      
-      // Get APK blob from response
-      const apkBlob = await response.blob()
-      const contentDisposition = response.headers.get("Content-Disposition")
-      let fileName = "app.apk"
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="([^"]+)"/)
-        if (match) fileName = match[1]
-      }
-      
-      setBuildState({
-        status: "finished",
-        progress: 100,
-        apkBlob,
-        apkFileName: fileName,
-        message: "Your APK is ready!"
-      })
-    } catch (error) {
-      setBuildState({
-        status: "error",
-        progress: 0,
-        message: error instanceof Error ? error.message : "Failed to generate APK"
-      })
-    }
-  }
-
-  // Fallback to Expo Snack build
+  // Build with Expo Snack/EAS
   const handleExpoBuild = async () => {
     setBuildState({ status: "generating", progress: 30, message: "Creating Expo Snack..." })
     
@@ -492,12 +591,6 @@ export function MobileSimulator({ url }: MobileSimulatorProps) {
         progress: 0,
         message: error instanceof Error ? error.message : "Failed to create Expo build"
       })
-    }
-  }
-
-  const handleDownloadAPK = () => {
-    if (buildState.apkBlob && buildState.apkFileName) {
-      saveAs(buildState.apkBlob, buildState.apkFileName)
     }
   }
 
@@ -675,22 +768,22 @@ For issues, visit: https://nativify.dev/support
               
               {buildState.status === "idle" ? (
                 <div className="flex flex-col gap-4 mt-4">
-                  {/* Direct APK Build Option */}
+                  {/* Expo EAS Build Option - Primary */}
                   <div className="p-4 bg-primary/10 rounded-lg border border-primary/30">
                     <div className="flex items-start gap-3">
-                      <Download className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                      <Package className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                       <div className="flex-1">
-                        <p className="font-medium text-foreground">Direct APK Download (Recommended)</p>
+                        <p className="font-medium text-foreground">Build with Expo EAS (Recommended)</p>
                         <p className="text-sm text-muted-foreground mt-1">
-                          Generate and download an APK file directly. No account required.
+                          Create a real React Native app with header bar, navigation controls, and pull-to-refresh. Requires free Expo account.
                         </p>
                         <Button
-                          onClick={handleDirectAPKBuild}
+                          onClick={handleExpoBuild}
                           className="mt-3 gap-2"
                           size="sm"
                         >
-                          <Download className="w-4 h-4" />
-                          Generate APK
+                          <Package className="w-4 h-4" />
+                          Build React Native APK
                         </Button>
                       </div>
                     </div>
@@ -698,26 +791,26 @@ For issues, visit: https://nativify.dev/support
 
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-xs">or use Expo for more options</span>
+                    <span className="text-xs">or download project files</span>
                     <div className="flex-1 h-px bg-border" />
                   </div>
 
-                  {/* Expo Build Option */}
+                  {/* Download Project Option */}
                   <div className="flex items-start gap-3 p-4 bg-surface rounded-lg border border-border">
-                    <Package className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+                    <Download className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
                     <div className="flex-1">
-                      <p className="font-medium text-foreground">Build with Expo</p>
+                      <p className="font-medium text-foreground">Download Project Files</p>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Use Expo Snack for full React Native customization and Play Store signing.
+                        Get the full React Native project to build locally with Android Studio or EAS CLI.
                       </p>
                       <Button
-                        onClick={handleExpoBuild}
+                        onClick={handleDownloadZip}
                         variant="outline"
                         className="mt-3 gap-2"
                         size="sm"
                       >
-                        <ExternalLink className="w-4 h-4" />
-                        Build with Expo
+                        <Download className="w-4 h-4" />
+                        Download ZIP
                       </Button>
                     </div>
                   </div>
@@ -740,17 +833,7 @@ For issues, visit: https://nativify.dev/support
                     <p className="font-medium text-foreground text-lg">{buildState.message}</p>
                   </div>
                   
-                  {buildState.apkBlob ? (
-                    <div className="flex flex-col items-center gap-3">
-                      <Button onClick={handleDownloadAPK} size="lg" className="gap-2 mt-2">
-                        <Download className="w-5 h-5" />
-                        Download APK ({(buildState.apkBlob.size / 1024 / 1024).toFixed(1)} MB)
-                      </Button>
-                      <p className="text-xs text-muted-foreground text-center max-w-sm">
-                        To install, enable &quot;Install from unknown sources&quot; in your Android settings.
-                      </p>
-                    </div>
-                  ) : buildState.snackUrl ? (
+                  {buildState.snackUrl && (
                     <div className="flex flex-col gap-4 w-full max-w-md">
                       <Button asChild size="lg" className="gap-2">
                         <a href={buildState.snackUrl} target="_blank" rel="noopener noreferrer">
@@ -769,7 +852,7 @@ For issues, visit: https://nativify.dev/support
                         </div>
                       )}
                     </div>
-                  ) : null}
+                  )}
 
                   <Button variant="outline" onClick={resetBuild} className="mt-4">
                     Build Another
@@ -780,21 +863,9 @@ For issues, visit: https://nativify.dev/support
                   <XCircle className="w-12 h-12 text-destructive" />
                   <div className="text-center">
                     <p className="font-medium text-foreground">{buildState.message}</p>
-                    {buildState.fallbackToExpo && (
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Try using Expo instead for a more reliable build.
-                      </p>
-                    )}
                   </div>
                   <div className="flex gap-2 mt-4">
-                    {buildState.fallbackToExpo ? (
-                      <Button onClick={handleExpoBuild} className="gap-2">
-                        <Package className="w-4 h-4" />
-                        Build with Expo
-                      </Button>
-                    ) : (
-                      <Button onClick={handleDirectAPKBuild}>Try Again</Button>
-                    )}
+                    <Button onClick={handleExpoBuild}>Try Again</Button>
                     <Button variant="outline" onClick={resetBuild}>Cancel</Button>
                   </div>
                 </div>
